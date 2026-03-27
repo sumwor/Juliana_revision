@@ -1,0 +1,526 @@
+function ASD_odor_rotarod(dataIndex, rot_data,saverotpath, strain_list,strainNum)
+
+% check for odor - rotarod correlation
+% removing noise first
+
+%% load rotarod performance
+strain = strain_list{strainNum};
+Genotype = unique(rot_data.Genotype);
+Animals = unique(rot_data.ASDID);
+Trials = unique(rot_data.Trial);
+
+perf = nan(length(Animals), length(Trials));
+geno_list = cell(length(Animals),1);
+
+All_geno = Genotype;
+
+if sum(contains(All_geno, 'KO'))>0
+    mutGene = 'KO';
+elseif sum(contains(All_geno,'HET'))>0
+    mutGene = 'HET';
+elseif sum(contains(All_geno,'HEM'))>0
+    mutGene = 'HEM';
+end
+
+for aa = 1:length(Animals)
+    geno_list(aa)= unique(rot_data.Genotype(strcmp(rot_data.ASDID,Animals{aa})));
+    tempResult = rot_data.TimeSpentOnRod(strcmp(rot_data.ASDID,Animals{aa}));
+    tempFall = rot_data.fallByTurning(strcmp(rot_data.ASDID,Animals{aa}));
+    tempResult(boolean(tempFall)) = NaN;
+    perf(aa,:) = tempResult;
+end
+
+% ignore the performance when fall by turning
+
+% convert time on rod to terminal speed
+%perf(:,1:6) = 5 + ((40-5)/300) * perf(:,1:6);
+%perf(:,7:12) = 10 + ((80-10)/300) * perf(:, 7:12);
+
+perf= 5 + ((80-5)/300) * perf;
+
+%geno_included = {'WT', 'HET'};
+if strcmp(strain, 'Nlgn3')
+    geno_included = {'WT', 'HEM'};
+elseif strcmp(strain, 'Cntnap2_KO')
+    geno_included = {'WT', 'KO'};
+elseif strcmp(strain, 'TSC2') | strcmp(strain, 'ChD8')
+    geno_included = {'WT', 'HET'};
+end
+
+%% load odor performance (AB3, CD3, DC6)
+
+nFiles = size(dataIndex,1);
+Subjects_odor = unique(dataIndex.Animal);
+nSubjects_odor = length(unique(dataIndex.Animal));
+
+% look for animals in both odor (Subjects_odor) and rotarod (Animals)
+% remove 'ASD' in Animals first
+Subjects_rotarod = cellfun(@(x) erase(x,'ASD'), Animals, 'UniformOutput', false);
+
+Subjects = intersect(Subjects_odor, Subjects_rotarod); % find common subjects in both datasets
+nSubjects = length(Subjects); % update the number of subjects
+
+genotype = cell(nSubjects,1);
+
+% number of trials
+nAB_trials = nan(nSubjects, 12);
+nCD_trials = nan(nSubjects, 4);
+nDC_trials = nan(nSubjects, 6);
+
+% performance
+blockLength = 100; % check performance in blocks of 100 trials
+
+perf_AB_block_session = nan(nSubjects,20, 3); % dim3: first session, second session
+perf_CD_block_session = nan(nSubjects,20, 3); % dim3: session
+perf_DC_block_session = nan(nSubjects,20, 6); % dim4: session
+
+
+%% trial number and performance
+for ii = 1:nSubjects
+
+    genotype(ii) = unique(dataIndex.Genotype(strcmp(dataIndex.Animal, Subjects{ii})));
+    %% look for first 3 AB sessions
+    subDataIndex = dataIndex(strcmp(dataIndex.Animal, Subjects{ii}),:);
+    % load the first three sessions
+    protocol = 'AB';
+
+    nSessions = 3;
+    results = cell(nSessions,1);
+    for ss=1:nSessions
+        if ss<= size(subDataIndex,1)
+            csvFile = fullfile(subDataIndex.BehPath{ss}, ...
+                subDataIndex.BehCSV{ss});
+            if exist(csvFile)
+                results{ss} = readtable(csvFile);
+            else
+                results{ss} = NaN;
+
+            end
+        else
+            results{ss} = NaN;
+            nAB_trials(ii,ss) = NaN;
+        end
+    end
+
+
+    % calculate performance in quantile on a session basis
+    perf_AB_block_session(ii,:,:) = perf_in_block_session(results, protocol, blockLength);
+
+
+
+    %% for CD odors
+    animalMask = strcmp(dataIndex.Animal, Subjects{ii});
+    stageMask = cellfun(@(x) isequal(x, [1;2;3;4]), dataIndex.OdorPresented);
+    subDataIndex = dataIndex(animalMask & stageMask,:);
+
+    protocol = 'CD';
+    nSessions = 3;
+    results = cell(nSessions,1);
+    results_AB = cell(nSessions,1);
+    for ss=1:nSessions
+        if ss<= size(subDataIndex,1)
+            csvFile = fullfile(subDataIndex.BehPath{ss}, ...
+                subDataIndex.BehCSV{ss});
+
+            results{ss} = readtable(csvFile);
+
+            % find the switch point
+            switchTrial = find(results{ss}.schedule == 3 | results{ss}.schedule == 4, 1);
+            results_AB{ss} = results{ss}(1:switchTrial-1,:);
+            results{ss} = results{ss}(switchTrial:end,:);
+
+        else
+            results{ss} = NaN;
+            results_AB{ss} = NaN;
+        end
+    end
+    % calculate performance in quantile
+
+    % calculate performance in quantile on a session basis
+    perf_CD_block_session(ii,:,:) = perf_in_block_session(results, protocol, blockLength);
+
+    % calculate performance in blocks
+    %perf_CD_block(ii,:) = perf_in_block(results, protocol,blockLength);
+
+    %% for DC performance
+
+    animalMask = strcmp(dataIndex.Animal, Subjects{ii});
+    stageMask = cellfun(@(x) isequal(x, [1;2;5;6]), dataIndex.OdorPresented) | cellfun(@(x) isequal(x, [1;2;3;4;5;6]), dataIndex.OdorPresented);
+    subDataIndex = dataIndex(animalMask & stageMask,:);
+
+    if ~isempty(subDataIndex)
+        protocol = 'DC';
+        nSessions = 6;
+        results = cell(nSessions,1);
+        results_AB = cell(nSessions, 1);
+        for ss =1 :nSessions
+            if ss<= size(subDataIndex,1)
+                csvFile = fullfile(subDataIndex.BehPath{ss}, ...
+                    subDataIndex.BehCSV{ss});
+
+                results{ss} = readtable(csvFile);
+
+                % find the switch point
+                switchCD =  find(results{ss}.schedule == 3 | results{ss}.schedule == 4, 1);
+                switchTrial = find(results{ss}.schedule == 5 | results{ss}.schedule == 6, 1);
+
+                if switchCD > 0
+
+                    results_AB{ss} = results{ss}(1:switchCD-1,:);
+                else
+
+                    results_AB{ss} = results{ss}(1:switchTrial-1,:);
+                end
+                results{ss} = results{ss}(switchTrial:end,:);
+
+            else
+                results{ss} = NaN;
+                results{ss} = NaN;
+            end
+        end
+        % calculate performance in quantile
+
+        % calculate performance in quantile on a session basis
+        perf_DC_block_session(ii,:,:) = perf_in_block_session(results, protocol, blockLength);
+
+    end
+end
+
+
+%% fit GLM to odor task, LM to rotarod task.
+% look for correlations between learning (slope), genotype baseline
+
+% AB1
+x_plot = 1:10;
+data = perf_AB_block_session(:,x_plot,1);
+
+nAnimals = size(data,1);
+nBlocks = size(data,2);
+
+animalID = repelem((1:nAnimals)', nBlocks, 1);   % animal index
+block    = repmat((1:nBlocks)', nAnimals, 1);    % 1–12 repeated for each animal
+dat = reshape(data', [], 1);                              % flatten performance
+group    = repelem(geno_list, nBlocks, 1); 
+
+
+% Subject labels (repeat subject ID for each block)
+subject = [repelem((1:nAnimals)', nBlocks, 1)];
+
+validIdx = ~isnan(dat);
+dat = dat(validIdx);
+group = group(validIdx);
+block = block(validIdx);
+subject = subject(validIdx);
+
+% --- Convert to table for fitlme ---
+tblData = table(dat, categorical(group), block, categorical(subject), ...
+    'VariableNames', {'Y', 'Group', 'Block', 'Subject'});
+
+tblData.Group = reordercats(tblData.Group, {'WT', mutGene});
+tblData.Block2 = tblData.Block.^2;
+tblData.lBlock = log(tblData.Block); % log predictor for saturation
+% --- Fit linear mixed-effects model ---
+% Block as random intercept (repeated measure within Subject)
+%lme = fitlme(tblData, 'Y ~ Group*Block + Group * Block2 + (Block|Subject)');
+
+% generalized linear model
+tblData.NumCorrect = round(tblData.Y * 100);   % Convert proportion → count
+TotalTrials = 100;
+% glme_all = fitglme(tblData, ...
+%     'NumCorrect ~ Group*Block + Group*lBlock + (1+Block|Subject)', ...
+%     'Distribution','Binomial','Link','logit','BinomialSize',100);
+glme = fitglme(tblData, ...
+    'NumCorrect ~ Group*Block  + Group*Block2 +  (1+Block|Subject)', ...
+    'Distribution','Binomial','Link','logit','BinomialSize',100);
+% glme_linear =  fitglme(tblData, ...
+%     'NumCorrect ~ Group*Block  + (1+Block|Subject)', ...
+%     'Distribution','Binomial','Link','logit','BinomialSize',100);
+% glme2 = fitglme(tblData, ...
+%     'NumCorrect ~ Group*Block + Group*Block2 + (1+Block|Subject)', ...
+%     'Distribution','Binomial','Link','logit','BinomialSize',100);
+subjects = categories(tblData.Subject);
+
+[RE1, REnames] = randomEffects(glme);
+% get the residuel as well
+resid_1 = residuals(glme,'ResidualType', 'raw'); 
+% calculate the average residual for each subject
+resid_1_sub = nan(numel(subjects),1);
+
+
+task1_intercept = zeros(numel(subjects),1);
+task1_block = zeros(numel(subjects),1);
+task1_block2 = zeros(numel(subjects),nBlocks);
+
+idx_intercept = find(strcmp(REnames.Name,'(Intercept)'));
+idx_slope     = find(strcmp(REnames.Name,'Block'));
+idx_slope2 = find(strcmp(REnames.Name, 'Block2'));
+% Fixed effects
+beta_intercept = glme.Coefficients.Estimate(strcmp(glme.Coefficients.Name,'(Intercept)'));
+beta_slope     = glme.Coefficients.Estimate(strcmp(glme.Coefficients.Name,'Block'));
+beta_slope2 = glme.Coefficients.Estimate(strcmp(glme.Coefficients.Name,'Block2'));
+% Check if Group_HET fixed effects exist
+hasGroupIntercept = any(strcmp(glme.Coefficients.Name,'Group_'+string(mutGene)'));
+hasGroupSlope     = any(strcmp(glme.Coefficients.Name,'Group_'+string(mutGene)+':Block'));
+hasGroupSlope2     = any(strcmp(glme.Coefficients.Name,'Group_'+string(mutGene)+':Block2'));
+if hasGroupIntercept
+    beta_group_intercept = glme.Coefficients.Estimate(strcmp(glme.Coefficients.Name,'Group_'+string(mutGene)));
+else
+    beta_group_intercept = 0;
+end
+if hasGroupSlope
+    beta_group_slope = glme.Coefficients.Estimate(strcmp(glme.Coefficients.Name,'Group_'+string(mutGene)+':Block'));
+else
+    beta_group_slope = 0;
+end
+if hasGroupSlope2
+    beta_group_slope2 = glme.Coefficients.Estimate(strcmp(glme.Coefficients.Name,'Group_'+string(mutGene)+':Block2'));
+else
+    beta_group_slope = 0;
+end
+
+for i = 1:numel(subjects)
+    subj = subjects{i};
+    subj_group = tblData.Group(tblData.Subject==subj);
+    % residual
+    resid_1_sub(i) = nanmean(resid_1(tblData.Subject==categorical(i)));
+
+    % Intercept
+    task1_intercept(i) = beta_intercept + RE1(idx_intercept(i));
+    if strcmp(subj_group(1),mutGene)
+        task1_intercept(i) = task1_intercept(i) + beta_group_intercept;
+    end
+    
+    % Slope
+    task1_block(i) = beta_slope + RE1(idx_slope(i));
+    if strcmp(subj_group(1),mutGene)
+        task1_block(i) = task1_block(i) + beta_group_slope;
+    end
+    
+    % total effect of block (block + block^2)
+    % for b = 1:nBlocks
+    %     if strcmp(subj_group(1),'WT')
+    %         task1_block2(i,b) = beta_slope + RE1(idx_slope(i)) + 2*(beta_slope2+RE1(idx_slope2(i)))*b;
+    %     else
+    %         task1_block2(i,b) = beta_slope + RE1(idx_slope(i)) + beta_group_slope + ...
+    %             2*(beta_group_slope2+beta_slope2+RE1(idx_slope2(i)))*b;
+    %     end
+    % end
+end
+
+%% lme for rotarod task
+% ANOVA to test significance
+nAnimals = size(perf,1);
+nTrials = size(perf,2);
+
+animalID = repelem((1:nAnimals)', nTrials, 1);   % animal index
+trial    = repmat((1:nTrials)', nAnimals, 1);    % 1–12 repeated for each animal
+perf_vec = reshape(perf', [], 1);                              % flatten performance
+group    = repelem(geno_list, nTrials, 1);       % expand group labels
+
+% Make table
+T = table(perf_vec, group, trial, animalID, ...
+          'VariableNames', {'perf','group','trial','animal'});
+
+% Ensure correct types
+T.group = categorical(T.group);          % categorical group (WT reference)
+T.group = reordercats(T.group, {'WT',mutGene});
+T.animal = categorical(T.animal);        % random grouping factor
+T.ltrial = log(T.trial);
+T.trial2 = T.trial.^2;
+% Fit mixed-effects model
+% Model: perf ~ group * trial + (1 | animal)
+lme = fitlme(T, 'perf ~ group*trial+(trial|animal)');
+%lmeold = fitlme(T,'perf ~ group * trial+(trial|animal)');
+%lmelog = fitlme(T, 'perf ~group*ltrial+(trial|animal)');
+[RE2, Bnames] = randomEffects(lme);  
+% get residual
+resid_2 = residuals(lme,'ResidualType', 'raw'); 
+resid_2_sub = nan(numel(subjects),1);
+idx_intercept = find(strcmp(Bnames.Name,'(Intercept)'));
+idx_slope     = find(strcmp(Bnames.Name,'trial'));
+beta_intercept = lme.Coefficients.Estimate(strcmp(lme.Coefficients.Name,'(Intercept)'));
+beta_slope     = lme.Coefficients.Estimate(strcmp(lme.Coefficients.Name,'trial'));
+hasGroupIntercept = any(strcmp(lme.Coefficients.Name,'group_'+string(mutGene)));
+hasGroupSlope     = any(strcmp(lme.Coefficients.Name,'group_'+string(mutGene)+':trial'));
+if hasGroupIntercept
+    beta_group_intercept = lme.Coefficients.Estimate(strcmp(lme.Coefficients.Name,'group_'+string(mutGene)));
+else
+    beta_group_intercept = 0;
+end
+if hasGroupSlope
+    beta_group_slope = lme.Coefficients.Estimate(strcmp(lme.Coefficients.Name,'group_'+string(mutGene)+':trial'));
+else
+    beta_group_slope = 0;
+end
+
+animals = categories(T.animal);
+nAnimals = numel(animals);
+
+task2_intercept = zeros(nAnimals,1);
+task2_slope     = zeros(nAnimals,1);
+
+for i = 1:nAnimals
+    a = animals{i};
+    idx = T.animal == a; 
+    % residual
+    resid_2_sub(i) = nanmean(resid_2(idx));
+    % Intercept
+    task2_intercept(i) = beta_intercept + RE2(idx_intercept(i));
+    if unique(T.group(idx)) == categorical({mutGene})  % HET animal
+        task2_intercept(i) = task2_intercept(i) + beta_group_intercept;
+    end
+    
+    % Slope
+    task2_slope(i) = beta_slope + RE2(idx_slope(i));
+    if unique(T.group(idx)) == categorical({mutGene})  % HET animal
+        task2_slope(i) = task2_slope(i) + beta_group_slope;
+    end
+end
+
+%% correlation plot
+figure;
+sgtitle('Subject-level baseline correlation across tasks');
+
+% intercept
+subplot(2,2,1)
+scatter(task1_intercept(strcmp(genotype,'WT')), task2_intercept(strcmp(genotype,'WT')), ...
+    80, 'b', 'filled','o');  % filled squares, size 80
+hold on;
+scatter(task1_intercept(strcmp(genotype,mutGene)), task2_intercept(strcmp(genotype,mutGene)), ...
+    80, 'r', 'filled','o');  % filled squares, size 80
+title('Baseline')
+xlabel('Odor(AB1)');
+ylabel('Rotarod');
+[r,p] = corr(task1_intercept, task2_intercept, 'Type', 'Spearman');
+txt = sprintf('r = %.3f\np = %.3g', r(1,2), p(1,2));
+xpos = min(task1_intercept) + 0.05*(max(task1_intercept)-min(task1_intercept));
+ypos = max(task2_intercept) - 0.05*(max(task2_intercept)-min(task2_intercept));
+text(xpos, ypos, txt, 'FontSize', 12, 'FontWeight', 'bold');
+
+% slope
+subplot(2,2,2)
+scatter(task1_block(strcmp(genotype,'WT')), task2_slope(strcmp(genotype,'WT')), ...
+    80, 'b', 'filled','o');  % filled squares, size 80
+hold on;
+scatter(task1_block(strcmp(genotype,mutGene)), task2_slope(strcmp(genotype,mutGene)), ...
+    80, 'r', 'filled','o');  % filled squares, size 80
+title('Learning slope')
+xlabel('Odor(AB1)');
+
+[r,p] = corr(task1_block, task2_slope,'Type', 'Pearson');
+txt = sprintf('r = %.3f\np = %.3g', r, p);
+xpos = min(task1_block) + 0.05*(max(task1_block)-min(task1_block));
+ypos = max(task2_slope) - 0.05*(max(task2_slope)-min(task2_slope));
+text(xpos, ypos, txt, 'FontSize', 12, 'FontWeight', 'bold');
+
+% block+block2
+% slope
+subplot(2,2,3)
+block_effect= nanmean(task1_block2,2);
+scatter(block_effect(strcmp(genotype,'WT')), task2_slope(strcmp(genotype,'WT')), ...
+    80, 'b', 'filled','o');  % filled squares, size 80
+hold on;
+scatter(block_effect(strcmp(genotype,mutGene)), task2_slope(strcmp(genotype,mutGene)), ...
+    80, 'r', 'filled','o');  % filled squares, size 80
+title('Learning slope')
+xlabel('Odor(AB1)');
+
+[r,p] = corrcoef(block_effect, task2_slope);
+txt = sprintf('r = %.3f\np = %.3g', r(1,2), p(1,2));
+xpos = min(block_effect) + 0.05*(max(block_effect)-min(block_effect));
+ypos = max(task2_slope) - 0.05*(max(task2_slope)-min(task2_slope));
+text(xpos, ypos, txt, 'FontSize', 12, 'FontWeight', 'bold');
+
+% residual
+subplot(2,2,4)
+scatter(resid_1_sub(strcmp(genotype,'WT')), resid_2_sub(strcmp(genotype,'WT')), ...
+    80, 'b', 'filled','o');  % filled squares, size 80
+hold on;
+scatter(resid_1_sub(strcmp(genotype,mutGene)), resid_2_sub(strcmp(genotype,mutGene)), ...
+    80, 'r', 'filled','o');  % filled squares, size 80
+title('Residual')
+xlabel('Odor(AB1)');
+
+[r,p] = corrcoef(resid_1_sub, resid_2_sub);
+txt = sprintf('r = %.3f\np = %.3g', r(1,2), p(1,2));
+xpos = min(resid_1_sub) + 0.05*(max(resid_1_sub)-min(resid_1_sub));
+ypos = max(resid_2_sub) - 0.05*(max(resid_2_sub)-min(resid_2_sub));
+text(xpos, ypos, txt, 'FontSize', 12, 'FontWeight', 'bold');
+
+% savethe figure 
+
+print(gcf,'-dpng',fullfile(saverotpath, 'Odor-Rotarod correlation'));    %png format
+saveas(gcf, fullfile(saverotpath, 'Odor-Rotarod correlation'), 'fig');
+saveas(gcf, fullfile(saverotpath, 'Odor-Rotarod correlation'),'svg');
+
+
+%% PCA?
+% --- Task 1 ---
+[coeff1, score1, latent1] = ppca(perf_AB_block_session(:,1:10,1), 3);
+learning_index_task1 = score1(:,1);
+avg_perf_task1 = nanmean(perf_AB_block_session(:,1:10,1), 2);
+
+% --- Task 2 ---
+[coeff2, score2, latent2] = ppca(perf, 3);
+learning_index_task2 = score2(:,1);
+avg_perf_task2 = nanmean(perf, 2);
+
+% --- Genotype info (assume categorical array geno_list) ---
+% WT = 1, mutGene = 2 (adjust if different)
+isWT = strcmp(geno_list,"WT");
+isMut = strcmp(geno_list,mutGene);
+
+% --- Compute Pearson correlation for all animals ---
+[r, p] = corr(learning_index_task1, learning_index_task2, 'Type', 'Pearson');
+
+% --- Figure ---
+figure;
+
+%% (1) Avg perf vs PC1 projection Task1
+subplot(2,2,1);
+hold on;
+scatter(avg_perf_task1(isWT), learning_index_task1(isWT), 70, 'b', 'filled');
+scatter(avg_perf_task1(isMut), learning_index_task1(isMut), 70, 'r', 'filled');
+ylabel('PC1 Projection');
+title('Odor');
+
+
+%% (2) Avg perf vs PC1 projection Task2
+subplot(2,2,3);
+hold on;
+scatter(avg_perf_task2(isWT), learning_index_task2(isWT), 70, 'b', 'filled');
+scatter(avg_perf_task2(isMut), learning_index_task2(isMut), 70, 'r', 'filled');
+xlabel('Average Performance');
+ylabel('PC1 Projection');
+title('Rotarod');
+
+hold off;
+
+%% (3) Scatter Task1 vs Task2 PC1 projections (main)
+subplot(2,2,2);
+hold on;
+scatter(learning_index_task1(isWT), learning_index_task2(isWT), 80, 'b', 'filled');
+scatter(learning_index_task1(isMut), learning_index_task2(isMut), 80, 'r', 'filled');
+xlabel('Odor PC1');
+ylabel('Rotarod PC1');
+
+% Show r and p inside the figure
+xlims = xlim; ylims = ylim;
+text(xlims(1)+0.05*diff(xlims), ylims(2)-0.1*diff(ylims), ...
+    sprintf('r = %.2f\np = %.3g', r, p), 'FontSize',12, 'FontWeight','bold');
+
+lgd=legend({'WT',mutGene}, 'Location','best');
+set(lgd, 'box','off')
+hold off;
+
+sgtitle('Learning Index Across Tasks by Genotype');
+% savethe figure 
+
+print(gcf,'-dpng',fullfile(saverotpath, 'Odor-Rotarod PCA correlation'));    %png format
+saveas(gcf, fullfile(saverotpath, 'Odor-Rotarod PCA correlation'), 'fig');
+saveas(gcf, fullfile(saverotpath, 'Odor-Rotarod PCA correlation'),'svg');
+
+
+
+%% things to do
+% combine all animals from rotarod
