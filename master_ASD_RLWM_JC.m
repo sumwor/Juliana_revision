@@ -21,7 +21,7 @@ colors.Shank3_det_female = [248, 151, 29] / 255;
 colors.TSC2_prob_male =  [125, 83, 162] / 255;
 colors.Shnk3_prob_male = [237, 28, 36] / 255;
 
-strainNum =1;
+strainNum =2;
 
 % save the dataIndex data
 dataIndexPath = fullfile(root_dir, strain_list{strainNum},'dataIndex.csv');
@@ -193,10 +193,6 @@ files = ASD_hybrid_dataPrep(dataIndex,savedatapath);
 % fit the model
 ASD_hybrid_modelFit(dataIndex, files, savedatapath, savefigpath);
 
-%% go over every session to plot performance in blocks for
-% 1. first two sessions of AB
-
-
-
+%% performance summary in blocks
 ASD_odor_summary(dataIndex, strain_list{strainNum}, savefigpath, savedatapath);
 
